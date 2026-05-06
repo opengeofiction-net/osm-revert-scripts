@@ -24,7 +24,7 @@ export EX
 
 while [ $EX = 0 ]
 do
-    wget -Olist.$$ "https://api.openstreetmap.org/api/0.6/changesets?display_name=$USER&time=$SINCE,$T" 
+    wget -Olist.$$ "https://opengeofiction.net/api/0.6/changesets?display_name=$USER&time=$SINCE,$T" 
     T=`grep "<changeset" list.$$ | tail -1 | cut -d\" -f4`
 
 # A previous version attempted to check for "multiple changesets in the same second" by doing
@@ -46,7 +46,7 @@ do
         then
             :
         else
-            wget -Oc$id.osc https://api.openstreetmap.org/api/0.6/changeset/$id/download
+            wget -Oc$id.osc https://opengeofiction.net/api/0.6/changeset/$id/download
             EX=0
         fi
     done

@@ -19,7 +19,7 @@ export EX
 
 while [ $EX = 0 ]
 do
-    wget -Olist "https://api.openstreetmap.org/api/0.6/changesets?user=$UID&time=$SINCE,$T" 
+    wget -Olist "https://opengeofiction.net/api/0.6/changesets?user=$UID&time=$SINCE,$T" 
     T=`grep "<changeset" list | tail -1 | cut -d\" -f4`
     T=`date +"%Y-%m-%dT%H:%M:%SZ" -u -d "$T + 1 second"`
 
@@ -30,7 +30,7 @@ do
         then
             :
         else
-            wget -Oc$id.osc https://api.openstreetmap.org/api/0.6/changeset/$id/download
+            wget -Oc$id.osc https://opengeofiction.net/api/0.6/changeset/$id/download
             EX=0
         fi
     done
