@@ -26,6 +26,8 @@ WIKI_BASE = "https://wiki.opengeofiction.net"
 WIKI_API = f"{WIKI_BASE}/api.php"
 QUEUE_PAGE = "OpenGeofiction:Revert queue"
 
+BOT_CONTROL_URL = f"{WIKI_BASE}/index.php/User:Brothie?action=raw"
+
 OGF_API_BASE = "https://opengeofiction.net/api/0.6/"
 
 REVERT_SCRIPTS = os.path.expanduser("~/osm-revert-scripts")
@@ -184,6 +186,33 @@ class WikiClient:
             if 'revisions' in page:
                 return page['revisions'][0]['*']
         return None
+
+
+# ── Permission Gate ────────────────────────────────────────────────────────────
+
+def check_bot_permission():
+    """
+    Check the bot control wiki page for {{permission|yes}}.
+    Returns True if permission is granted, False otherwise.
+    If the page cannot be loaded, assume no permission.
+    """
+    print("Checking bot control permission...")
+    try:
+        r = requests.get(BOT_CONTROL_URL, timeout=15, headers={
+            "User-Agent": "OGFRevertBot/1.0",
+            "Referer": "https://opengeofiction.net/",
+        })
+        raw = r.text
+    except Exception as e:
+        print(f"  WARNING: Could not load bot control page: {e}")
+        return False
+
+    if "{{permission|yes}}" in raw:
+        print("  Bot permission granted")
+        return True
+    else:
+        print("  Bot permission NOT granted (missing {{permission|yes}})")
+        return False
 
 
 # ── Queue Parsing ──────────────────────────────────────────────────────────────
@@ -554,6 +583,13 @@ def main():
         return
 
     print(f"Found {len(requests)} pending request(s)\n")
+
+    # Permission gate
+    if not check_bot_permission():
+        print("Aborting - bot permission not granted.")
+        sys.exit(0)
+
+    print()
 
     modified = False
     new_content = content
