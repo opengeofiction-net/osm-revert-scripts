@@ -263,8 +263,10 @@ class OGFClient:
         })
 
     def get_changeset(self, cs_id):
-        """Get changeset metadata."""
+        """Get changeset metadata. Returns None if not found (404)."""
         r = self.session.get(f"{OGF_API_BASE}changeset/{cs_id}")
+        if r.status_code == 404:
+            return None
         r.raise_for_status()
         return r.text
 
@@ -310,6 +312,8 @@ class OGFClient:
     def get_changeset_info(self, cs_id):
         """Get detailed changeset info including user."""
         xml = self.get_changeset(cs_id)
+        if xml is None:
+            return None
         m = re.search(r'user="([^"]*)"', xml)
         if m:
             return {'user': m.group(1), 'id': cs_id}
@@ -318,6 +322,8 @@ class OGFClient:
     def get_changeset_timestamp(self, cs_id):
         """Get the created_at timestamp of a changeset."""
         xml = self.get_changeset(cs_id)
+        if xml is None:
+            return None
         m = re.search(r'created_at="([^"]*)"', xml)
         if m:
             return m.group(1)
