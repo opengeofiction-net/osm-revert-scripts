@@ -304,7 +304,7 @@ class OGFClient:
         if until_date is None:
             until_date = datetime.now(tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
         params = {
-            'display_name': username.lower(),
+            'display_name': username,
             'time': f"{since_date},{until_date}"
         }
         r = self.session.get(f"{OGF_API_BASE}changesets", params=params)
@@ -378,45 +378,58 @@ def validate_request(req, ogf):
     first_cs = req['first_cs']
     last_cs = req['last_cs']
 
-    # If neither specified, we revert all changesets
-    if first_cs is None and last_cs is None:
-        return True, "Reverting all changesets (will determine range)"
-
     # Check changeset ownership (case-insensitive comparison)
-    if first_cs is not None:
+    # When both are None (revert all), we verify a sample instead
+    if first_cs is not None and last_cs is None:
+        # "From X onwards" — verify the anchor changeset
         info = ogf.get_changeset_info(first_cs)
         if info is None:
             return False, f"Changeset {first_cs} not found"
         if info['user'].lower() != mapper.lower():
             return False, f"Changeset {first_cs} belongs to '{info['user']}', not '{mapper}'"
-        # Guard rail: check changeset is not before MIN_YEAR
         ts = ogf.get_changeset_timestamp(first_cs)
         if ts and int(ts[:4]) < MIN_YEAR:
             return False, f"Changeset {first_cs} is from {ts[:4]}, before {MIN_YEAR}"
-
-    if last_cs is not None:
+    elif last_cs is not None and first_cs is None:
+        # "Up to X" — verify the anchor changeset
         info = ogf.get_changeset_info(last_cs)
         if info is None:
             return False, f"Changeset {last_cs} not found"
         if info['user'].lower() != mapper.lower():
             return False, f"Changeset {last_cs} belongs to '{info['user']}', not '{mapper}'"
-        # Guard rail: check changeset is not before MIN_YEAR
         ts = ogf.get_changeset_timestamp(last_cs)
         if ts and int(ts[:4]) < MIN_YEAR:
             return False, f"Changeset {last_cs} is from {ts[:4]}, before {MIN_YEAR}"
+    elif first_cs is not None and last_cs is not None:
+        # Specific range — verify both endpoints
+        info = ogf.get_changeset_info(first_cs)
+        if info is None:
+            return False, f"Changeset {first_cs} not found"
+        if info['user'].lower() != mapper.lower():
+            return False, f"Changeset {first_cs} belongs to '{info['user']}', not '{mapper}'"
+        ts = ogf.get_changeset_timestamp(first_cs)
+        if ts and int(ts[:4]) < MIN_YEAR:
+            return False, f"Changeset {first_cs} is from {ts[:4]}, before {MIN_YEAR}"
+
+        info = ogf.get_changeset_info(last_cs)
+        if info is None:
+            return False, f"Changeset {last_cs} not found"
+        if info['user'].lower() != mapper.lower():
+            return False, f"Changeset {last_cs} belongs to '{info['user']}', not '{mapper}'"
+        ts = ogf.get_changeset_timestamp(last_cs)
+        if ts and int(ts[:4]) < MIN_YEAR:
+            return False, f"Changeset {last_cs} is from {ts[:4]}, before {MIN_YEAR}"
+    # else: both None (all changesets) — no anchor to verify, will verify by count
 
     # Get all user changesets for range determination
     all_ids = ogf.get_user_changesets_by_id_range(mapper, first_cs or 0, last_cs or 99999999)
 
     # Apply range filters based on what's specified
     if first_cs is not None and last_cs is not None:
-        # Specific range
         cs_ids = [x for x in all_ids if first_cs <= x <= last_cs]
     elif first_cs is not None:
-        # From first_cs onwards (to most recent)
         cs_ids = [x for x in all_ids if x >= first_cs]
     elif last_cs is not None:
-        # From start to last_cs
         cs_ids = [x for x in all_ids if x <= last_cs]
     else:
         cs_ids = all_ids
@@ -424,7 +437,7 @@ def validate_request(req, ogf):
     if len(cs_ids) > MAX_CHANGESETS:
         return False, f"Too many changesets: {len(cs_ids)} (max {MAX_CHANGESETS})"
     if len(cs_ids) == 0:
-        return False, "No changesets found in the specified range"
+        return False, "No changesets found for this mapper since 2026"
 
     req['_cs_ids'] = cs_ids
     return True, f"Will revert {len(cs_ids)} changesets"
