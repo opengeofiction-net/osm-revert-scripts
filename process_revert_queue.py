@@ -300,7 +300,7 @@ class OGFClient:
         return r.text
 
     def get_user_changesets(self, username, since_date, until_date=None):
-        """Get list of changesets for a user in a time range. Username is normalized to lowercase."""
+        """Get list of changesets for a user in a time range."""
         if until_date is None:
             until_date = datetime.now(tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
         params = {
@@ -308,6 +308,8 @@ class OGFClient:
             'time': f"{since_date},{until_date}"
         }
         r = self.session.get(f"{OGF_API_BASE}changesets", params=params)
+        if r.status_code == 404:
+            return None
         r.raise_for_status()
         return r.text
 
@@ -315,6 +317,7 @@ class OGFClient:
         """
         Get all changesets for a user within a changeset ID range.
         Since the API limits to 100 per request, we paginate.
+        Returns None if the user does not exist (404).
         """
         since = f"{MIN_YEAR}-01-01T00:00:00"
         all_ids = []
@@ -322,6 +325,8 @@ class OGFClient:
         until = datetime.now(tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
         while True:
             xml = self.get_user_changesets(username, since, until)
+            if xml is None:
+                return None  # user not found
             ids = re.findall(r'<changeset\s+id="(\d+)"', xml)
             if not ids:
                 break
@@ -436,7 +441,7 @@ def validate_request(req, ogf):
         info = ogf.get_changeset_info(first_cs)
         if info is None:
             return False, f"Changeset {first_cs} not found"
-        if info['user'].lower() != mapper.lower():
+        if info['user'] != mapper:
             return False, f"Changeset {first_cs} belongs to '{info['user']}', not '{mapper}'"
         ts = ogf.get_changeset_timestamp(first_cs)
         if ts and int(ts[:4]) < MIN_YEAR:
@@ -446,7 +451,7 @@ def validate_request(req, ogf):
         info = ogf.get_changeset_info(last_cs)
         if info is None:
             return False, f"Changeset {last_cs} not found"
-        if info['user'].lower() != mapper.lower():
+        if info['user'] != mapper:
             return False, f"Changeset {last_cs} belongs to '{info['user']}', not '{mapper}'"
         ts = ogf.get_changeset_timestamp(last_cs)
         if ts and int(ts[:4]) < MIN_YEAR:
@@ -456,7 +461,7 @@ def validate_request(req, ogf):
         info = ogf.get_changeset_info(first_cs)
         if info is None:
             return False, f"Changeset {first_cs} not found"
-        if info['user'].lower() != mapper.lower():
+        if info['user'] != mapper:
             return False, f"Changeset {first_cs} belongs to '{info['user']}', not '{mapper}'"
         ts = ogf.get_changeset_timestamp(first_cs)
         if ts and int(ts[:4]) < MIN_YEAR:
@@ -465,7 +470,7 @@ def validate_request(req, ogf):
         info = ogf.get_changeset_info(last_cs)
         if info is None:
             return False, f"Changeset {last_cs} not found"
-        if info['user'].lower() != mapper.lower():
+        if info['user'] != mapper:
             return False, f"Changeset {last_cs} belongs to '{info['user']}', not '{mapper}'"
         ts = ogf.get_changeset_timestamp(last_cs)
         if ts and int(ts[:4]) < MIN_YEAR:
@@ -474,6 +479,8 @@ def validate_request(req, ogf):
 
     # Get all user changesets for range determination
     all_ids = ogf.get_user_changesets_by_id_range(mapper, first_cs or 0, last_cs or 99999999)
+    if all_ids is None:
+        return False, f"User '{mapper}' not found"
 
     # For "all changesets" requests (both params None), exclude already-reverted ones
     if first_cs is None and last_cs is None:
