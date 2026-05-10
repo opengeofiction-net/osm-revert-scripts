@@ -369,6 +369,57 @@ class OGFClient:
             f.write(r.content)
         return True
 
+    def get_reverted_changesets_for_user(self, mapper):
+        """
+        Find changesets already reverted for a given user by scanning
+        Brothie's revert changeset comments. Returns a set of CS IDs.
+        Revert comments follow the pattern:
+        'Reverting changesets X-Y by USERNAME per revert queue request'
+        or 'Reverting changeset X by USERNAME per revert queue request'
+        """
+        reverted = set()
+        since = f"{MIN_YEAR}-01-01T00:00:00"
+        until = datetime.now(tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+
+        # Brothie's uid (the bot account that creates revert changesets)
+        brothie_uid = 23845
+
+        # Query Brothie's changesets and filter by revert comment pattern
+        while True:
+            params = {
+                'user': brothie_uid,
+                'time': f"{since},{until}"
+            }
+            r = self.session.get(f"{OGF_API_BASE}changesets", params=params)
+            r.raise_for_status()
+            xml = r.text
+
+            cs_ids_in_page = re.findall(r'<changeset\s+id="(\d+)"', xml)
+            if not cs_ids_in_page:
+                break
+
+            for cs_id in cs_ids_in_page:
+                cs_xml = self.get_changeset(cs_id)
+                if cs_xml and 'per revert queue request' in cs_xml:
+                    m_user = re.search(
+                        rf'Reverting changesets?\s+(\d+)(?:-(\d+))?\s+by\s+{re.escape(mapper)}\s+per revert queue request',
+                        cs_xml
+                    )
+                    if m_user:
+                        start = int(m_user.group(1))
+                        end = int(m_user.group(2)) if m_user.group(2) else start
+                        for cid in range(start, end + 1):
+                            reverted.add(cid)
+
+            # Paginate
+            timestamps = re.findall(r'<changeset[^>]*created_at="([^"]*)"', xml)
+            if timestamps:
+                until = timestamps[-1]
+            else:
+                break
+
+        return reverted
+
 
 # ── Validation ─────────────────────────────────────────────────────────────────
 
@@ -424,6 +475,13 @@ def validate_request(req, ogf):
     # Get all user changesets for range determination
     all_ids = ogf.get_user_changesets_by_id_range(mapper, first_cs or 0, last_cs or 99999999)
 
+    # For "all changesets" requests (both params None), exclude already-reverted ones
+    if first_cs is None and last_cs is None:
+        already_reverted = ogf.get_reverted_changesets_for_user(mapper)
+        if already_reverted:
+            print(f"  Excluding {len(already_reverted)} already-reverted changesets")
+            all_ids = [x for x in all_ids if x not in already_reverted]
+
     # Apply range filters based on what's specified
     if first_cs is not None and last_cs is not None:
         cs_ids = [x for x in all_ids if first_cs <= x <= last_cs]
@@ -437,6 +495,8 @@ def validate_request(req, ogf):
     if len(cs_ids) > MAX_CHANGESETS:
         return False, f"Too many changesets: {len(cs_ids)} (max {MAX_CHANGESETS})"
     if len(cs_ids) == 0:
+        if first_cs is None and last_cs is None and already_reverted:
+            return False, f"All {len(already_reverted)} changesets already reverted"
         return False, "No changesets found for this mapper since 2026"
 
     req['_cs_ids'] = cs_ids
@@ -520,11 +580,14 @@ def execute_revert(req, ogf, prefs):
 # ── Wiki Update ────────────────────────────────────────────────────────────────
 
 def update_wiki_entry(content, original_text, mapper, first_cs, last_cs,
-                      success, message, requester, revert_cs_ids=None):
+                      success, message, requester, revert_cs_ids=None, cs_ids=None):
     """
     Replace a {{revert-please|...}} entry with {{revert-complete|...}}.
     Template format: {{revert-complete|user|first|last|requester_sig|status|actioner_sig|comment}}
     Returns the updated content.
+
+    When the original request had empty first_cs/last_cs (meaning "all"),
+    populate them with the actual min/max of the reverted changesets.
     """
     status = "success" if success else "fail"
 
@@ -536,12 +599,19 @@ def update_wiki_entry(content, original_text, mapper, first_cs, last_cs,
         comment_parts.append(f"Revert changeset(s): {', '.join(str(x) for x in revert_cs_ids)}")
     comment = '; '.join(comment_parts) if comment_parts else ''
 
+    # Determine the actual range to display
+    actual_first = first_cs
+    actual_last = last_cs
+    if first_cs is None and last_cs is None and cs_ids:
+        actual_first = min(cs_ids)
+        actual_last = max(cs_ids)
+
     # ~~~~ will expand to the bot user's signature when the wiki renders it
     replacement = (
         f"{{{{revert-complete"
         f"|{mapper}"
-        f"|{first_cs or ''}"
-        f"|{last_cs or ''}"
+        f"|{actual_first}"
+        f"|{actual_last}"
         f"|{requester}"
         f"|{status}"
         f"|~~~~"
@@ -621,7 +691,8 @@ def main():
                 new_content = update_wiki_entry(
                     new_content, req['original_text'],
                     req['mapper'], req['first_cs'], req['last_cs'],
-                    False, msg, req['requester']
+                    False, msg, req['requester'],
+                    cs_ids=req.get('_cs_ids', [])
                 )
             modified = True
             continue
@@ -649,7 +720,8 @@ def main():
                 new_content, req['original_text'],
                 req['mapper'], req['first_cs'], req['last_cs'],
                 success, msg, req['requester'],
-                revert_cs_ids if success else None
+                revert_cs_ids if success else None,
+                cs_ids=req.get('_cs_ids', [])
             )
             modified = True
         else:
@@ -657,7 +729,8 @@ def main():
                 new_content, req['original_text'],
                 req['mapper'], req['first_cs'], req['last_cs'],
                 success, msg, req['requester'],
-                revert_cs_ids if success else None
+                revert_cs_ids if success else None,
+                cs_ids=req.get('_cs_ids', [])
             )
             modified = True
 
